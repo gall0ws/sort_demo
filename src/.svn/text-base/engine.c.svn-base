@@ -1,0 +1,542 @@
+/* $Id$
+ *
+ * Copyright (c) 2009 Sergio Perticone <g4ll0ws@gmail.com>
+ *
+ * Permission to use, copy, modify, and/or distribute this software for any
+ * purpose with or without fee is hereby granted, provided that the above
+ * copyright notice and this permission notice appear in all copies.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+ * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ */
+
+#if HAVE_CONFIG_H
+# include <config.h>
+#endif
+
+#include <errno.h>
+#include <limits.h>
+
+#include <SDL_timer.h>
+#include <SDL_events.h>
+
+#include "video.h"
+#include "menu.h"
+#include "dialog.h"
+#include "array.h"
+
+#if HAVE_LIBSDL_TTF
+# include "text.h"
+#endif 
+
+#include "engine.h"
+
+#define VIDEO_WIDTH	512
+#define VIDEO_HEIGHT	400
+
+#if HAVE_LIBSDL_TTF
+
+# define TEXT_ALGO_Y	372
+# define TEXT_CASE_Y	390
+# define TEXT_PADDING_X	15
+# define TEXT_PADDING_Y	15
+# define TEXT_COLOR	0xdedede
+
+# define FONT_FILENAME	"DejaVuSans.ttf"
+# define FONT_PTS	18
+
+#endif /* HAVE_LIBSDL_TTF */
+
+#define IDLE_MS		20
+
+/*
+ * Engine states:
+ */
+enum EngineState {
+	STATE_DIALOG_EXIT,
+	STATE_MENU_ALGO,
+	STATE_MENU_CASE,
+	STATE_EXEC_PRE,
+	STATE_EXEC_RUNNING,
+	STATE_EXEC_FINISHED,
+};
+
+/*
+ * Engine variables:
+ */
+static struct {
+	u8 state;
+	u8 state_prev;
+	bool running;
+
+	Array  *array;
+	Menu   *menu_algo, *menu_case;
+	Dialog *exit_dialog;
+
+#if HAVE_LIBSDL_TTF
+	Text   *txt_algo, *txt_case;
+#endif
+
+	char *datadir;
+} sd;
+
+#if HAVE_LIBSDL_TTF
+
+static const char *ARRAY_STRALGO[] = {
+	"bubble sort", "selection sort", 
+	"insertion sort", "quick sort", "heap sort",
+};
+
+static const char *ARRAY_STRCASE[] = {
+	"random", "reversed",
+	"nearly sorted", "few unique",
+};
+
+#endif /* HAVE_LIBSDL_TTF */
+
+static void draw            (void);
+static void handle_input    (void);
+static void on_array_sorted (Array *);
+
+/*
+ * Initialize sort_demo's engine.
+ */
+int engine_init(int opts, const char *datadir)
+{
+#if HAVE_LIBSDL_TTF
+	char path[PATH_MAX];
+#endif
+
+	if (video_init() != 0)
+		return -1;
+	
+	if (video_set_mode(VIDEO_WIDTH, VIDEO_HEIGHT, 0) != 0) {
+		video_quit();
+		return -1;
+	}
+
+#if HAVE_LIBSDL_TTF
+	if (ttf_init() != 0) {
+		video_quit();
+		return -1;
+	}
+#endif
+
+	if (opts & ENGINE_OPTION_FS)
+		video_toggle_fullscreen();
+
+	video_set_title("Sort Demo");
+
+	sd.datadir = datadir ? strdup(datadir) : strdup(DATADIR);
+
+	sd.array = array_new();
+	array_set_callback(sd.array, on_array_sorted);
+
+ 	sd.menu_algo = menu_new(MENU_TYPE_ALGO);
+	sd.menu_case = menu_new(MENU_TYPE_CASE);
+
+	sd.exit_dialog = dialog_new();
+
+#if HAVE_LIBSDL_TTF
+	join_path(sd.datadir, FONT_FILENAME, path);
+
+	sd.txt_algo = text_new(path, FONT_PTS, TEXT_COLOR);
+	sd.txt_case = text_new(path, FONT_PTS-2, TEXT_COLOR);
+#endif
+
+	sd.running = 0;
+	sd.state = STATE_MENU_ALGO;
+
+	return 0;
+}
+
+/*
+ * Quit sort_demo's engine.
+ */
+INLINE void engine_quit(void)
+{
+	objects_free(sd.array, sd.menu_algo, sd.menu_case, sd.exit_dialog,NULL);
+	free(sd.datadir);
+
+#if HAVE_LIBSDL_TTF
+	objects_free(sd.txt_algo, sd.txt_case, NULL);
+	ttf_quit();
+#endif
+
+	video_quit();
+}
+
+/*
+ * sort_demo main loop.
+ */
+int engine_loop(void)
+{
+	u16 algo, kase, w;
+
+	if (sd.running) {
+		log_warn("main loop is already running");
+		return 1;
+	}
+
+	sd.running = 1;
+	sd.state = STATE_MENU_ALGO;
+
+	do {
+		handle_input();
+		
+		if (sd.state == STATE_EXEC_PRE) {
+			video_toggle_cursor();
+			algo = menu_get_value(sd.menu_algo);
+			kase = menu_get_value(sd.menu_case);
+#if HAVE_LIBSDL_TTF
+			text_set_text(sd.txt_algo, "%s", ARRAY_STRALGO[algo]);
+			text_set_text(sd.txt_case, "%s", ARRAY_STRCASE[kase]);
+
+			w = layer_get_width(sd.txt_algo);
+			layer_set_xy(sd.txt_algo,
+				      VIDEO_WIDTH - w - TEXT_PADDING_X,
+				      TEXT_ALGO_Y - TEXT_PADDING_Y);
+
+			w = layer_get_width(sd.txt_case);
+			layer_set_xy(sd.txt_case,
+				      VIDEO_WIDTH - w - TEXT_PADDING_X,
+				      TEXT_CASE_Y - TEXT_PADDING_Y);
+#endif /* HAVE_LIBSDL_TTF */
+
+			sd.state = STATE_EXEC_RUNNING;
+			array_sort(sd.array, algo, kase);
+		}
+
+		draw();
+		SDL_Delay(IDLE_MS);
+	} while (sd.running);
+    
+	return 0;
+}
+
+/*
+ * Return the engine datadir.
+ */
+INLINE const char *engine_get_datadir(void)
+{
+	return sd.datadir;
+}
+
+/*
+ * Absolutely non-portable utility to join path `a' with `b'.
+ */
+char *join_path(const char *a, const char *b, char *buf)
+{
+	char *joined_path;
+	char *retp;
+	size_t sz;
+
+	sz = snprintf(NULL, 0, "%s/%s", a, b);
+
+#if HAVE_ALLOCA
+	joined_path = alloca(sz+1);
+#else
+	joined_path = malloc(sz+1);
+#endif
+
+	sprintf(joined_path, "%s/%s", a, b);
+	errno = 0;
+	retp = realpath(joined_path, buf);
+	if (!retp)
+		log_err("join_path(%s): %s", joined_path, strerror(errno));
+
+#if !HAVE_ALLOCA
+	free(joined_path);
+#endif
+
+	return retp;
+}
+
+/*
+ * Performs sprites blit then update display.
+ */
+static void draw(void)
+{
+	switch (sd.state) {
+	case STATE_DIALOG_EXIT:
+		switch (sd.state_prev) {
+		case STATE_MENU_ALGO:
+			object_blit(sd.menu_algo);
+			break;
+
+		case STATE_MENU_CASE:
+			object_blit(sd.menu_case);
+			break;
+
+		default:
+#if HAVE_LIBSDL_TTF			
+			objects_blit(sd.array, sd.txt_algo, sd.txt_case, NULL);
+#else
+			object_blit(sd.array);
+#endif
+		}
+
+		object_blit(sd.exit_dialog);
+		break;
+
+	case STATE_MENU_ALGO:
+		object_blit(sd.menu_algo);
+		break;
+
+	case STATE_MENU_CASE:
+		object_blit(sd.menu_case);
+		break;
+		
+	default:
+#if HAVE_LIBSDL_TTF			
+			objects_blit(sd.array, sd.txt_algo, sd.txt_case, NULL);
+#else
+			object_blit(sd.array);
+#endif
+	}
+
+	video_flip();
+}
+
+/*
+ * SDL-based handler for user input (mouse and keyboard).
+ */
+static void handle_input(void)
+{
+	static SDL_Event event;
+	int x, y;
+
+	while (SDL_PollEvent(&event)) {
+		switch (event.type) {
+		case SDL_MOUSEMOTION:
+			switch (sd.state) {
+			case STATE_DIALOG_EXIT:
+				dialog_select(sd.exit_dialog, event.motion.x,
+					      event.motion.y);
+				break;
+
+			case STATE_MENU_ALGO:
+				menu_select(sd.menu_algo, event.motion.x,
+					    event.motion.y);
+				break;
+
+			case STATE_MENU_CASE:
+				menu_select(sd.menu_case, event.motion.x,
+					    event.motion.y);
+				break;
+			}
+
+		case SDL_MOUSEBUTTONDOWN:
+			if (SDL_GetMouseState(&x, &y) == SDL_BUTTON_LEFT) {
+				switch (sd.state) {
+				case STATE_DIALOG_EXIT:
+					if (!dialog_select(sd.exit_dialog,
+							   x, y))
+						break;
+
+					if (dialog_get_value(sd.exit_dialog)) {
+						sd.running = 0;
+						return;
+					}
+					else {
+						sd.state = sd.state_prev;
+					}
+					break;
+
+				case STATE_MENU_ALGO:
+					if (menu_select(sd.menu_algo, x, y)) {
+						sd.state = STATE_MENU_CASE;
+						menu_select(sd.menu_case, x, y);
+						return;
+					}
+					break;
+
+				case STATE_MENU_CASE:
+					if (menu_select(sd.menu_case, x, y))
+						sd.state = STATE_EXEC_PRE;
+
+					break;
+				}
+			}
+			break;
+
+		case SDL_KEYDOWN:
+			switch (event.key.keysym.sym) {
+			case SDLK_ESCAPE:
+				switch (sd.state) {
+				case STATE_DIALOG_EXIT:
+					sd.state = sd.state_prev;
+					break;
+
+				case STATE_MENU_ALGO:
+					sd.state_prev = sd.state;
+					sd.state = STATE_DIALOG_EXIT;
+					break;
+
+				case STATE_MENU_CASE:
+					sd.state = STATE_MENU_ALGO;
+					break;
+
+				case STATE_EXEC_RUNNING:
+					array_stop_sorting(sd.array);
+					sd.state = STATE_MENU_CASE;
+					video_toggle_cursor();
+					break;
+
+				case STATE_EXEC_FINISHED:
+					sd.state = STATE_MENU_CASE;
+					video_toggle_cursor();
+					break;
+				}
+				break;
+				
+			case SDLK_DOWN:
+				switch (sd.state) {
+				case STATE_MENU_ALGO:
+					menu_down(sd.menu_algo);
+					return;
+
+				case STATE_MENU_CASE:
+					menu_down(sd.menu_case);
+					return;
+
+				case STATE_EXEC_FINISHED:
+					sd.state = STATE_MENU_CASE;
+					video_toggle_cursor();
+					return;
+				}
+				break;
+
+			case SDLK_UP:
+				switch (sd.state) {
+				case STATE_MENU_ALGO:
+					menu_up(sd.menu_algo);
+					return;
+
+				case STATE_MENU_CASE:
+					menu_up(sd.menu_case);
+					return;
+
+				case STATE_EXEC_FINISHED:
+					sd.state = STATE_MENU_CASE;
+					video_toggle_cursor();
+					return;
+				}
+				break;
+
+			case SDLK_LEFT:
+				if (sd.state == STATE_DIALOG_EXIT) {
+					dialog_left(sd.exit_dialog);
+				}
+				else if (sd.state == STATE_EXEC_FINISHED) {
+					sd.state = STATE_MENU_CASE;
+					video_toggle_cursor();
+				}
+				break;
+
+			case SDLK_RIGHT:
+				if (sd.state == STATE_DIALOG_EXIT) {
+					dialog_right(sd.exit_dialog);
+				}
+				else if (sd.state == STATE_EXEC_FINISHED) {
+					sd.state = STATE_MENU_CASE;
+					video_toggle_cursor();
+				}
+				break;
+
+			case SDLK_RETURN:
+				switch (sd.state) {
+				case STATE_DIALOG_EXIT:
+					if (dialog_get_value(sd.exit_dialog)) {
+						sd.running = 0;
+						return;
+					}
+					else {
+						sd.state = sd.state_prev;
+						break;
+					}
+
+				case STATE_MENU_ALGO:
+					sd.state = STATE_MENU_CASE;
+					return;
+
+				case STATE_MENU_CASE:
+					sd.state = STATE_EXEC_PRE;
+					return;
+
+				case STATE_EXEC_FINISHED:
+					sd.state = STATE_MENU_CASE;
+					video_toggle_cursor();
+					return;
+				}
+				break;
+
+			case SDLK_f:
+				video_toggle_fullscreen();
+				break;
+
+			case SDLK_g:
+				video_toggle_grab();
+				break;
+
+			case SDLK_n:
+				if (sd.state == STATE_DIALOG_EXIT) {
+					sd.state = sd.state_prev;
+				}
+				else if (sd.state == STATE_EXEC_FINISHED) {
+					sd.state = STATE_MENU_CASE;
+					video_toggle_cursor();
+				}
+				break;
+
+			case SDLK_q:
+				if (sd.state == STATE_DIALOG_EXIT)
+					return;
+
+				sd.state_prev = sd.state;
+				sd.state = STATE_DIALOG_EXIT;
+				break;
+
+			case SDLK_y:
+				if (sd.state == STATE_DIALOG_EXIT) {
+					dialog_left(sd.exit_dialog);
+					sd.running = 0;
+					return;
+				}
+				else if (sd.state == STATE_EXEC_FINISHED) {
+					sd.state = STATE_MENU_CASE;
+					video_toggle_cursor();
+				}
+				break;
+
+			default:
+				if (sd.state == STATE_EXEC_FINISHED) {
+					sd.state = STATE_MENU_CASE;
+					video_toggle_cursor();
+				}
+			}
+			break;
+
+		case SDL_QUIT:
+			if (sd.state == STATE_DIALOG_EXIT)
+				return;
+
+			sd.state_prev = sd.state;
+			sd.state = STATE_DIALOG_EXIT;
+			return;
+		}
+	}
+}
+
+/*
+ * Event catched invoked when the array is sorted.
+ */
+INLINE static void on_array_sorted(Array *ignored)
+{
+	sd.state = STATE_EXEC_FINISHED;
+}

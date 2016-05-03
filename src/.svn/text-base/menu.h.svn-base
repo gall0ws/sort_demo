@@ -1,0 +1,44 @@
+/* $Id$
+ *
+ * Copyright (c) 2009 Sergio Perticone <g4ll0ws@gmail.com>
+ *
+ * Permission to use, copy, modify, and/or distribute this software for any
+ * purpose with or without fee is hereby granted, provided that the above
+ * copyright notice and this permission notice appear in all copies.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+ * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ */
+
+/*
+ * Object Hierarchy:
+ *
+ *  Object
+ *   +----Menu (final)
+ */
+
+#ifndef MENU_H
+#define MENU_H
+
+#include "object.h"
+
+enum MenuType {
+	MENU_TYPE_ALGO = 0,
+	MENU_TYPE_CASE
+};
+
+typedef struct _Menu Menu;
+
+Menu *menu_new (int type);
+
+bool menu_up        (Menu *self);
+bool menu_down      (Menu *self);
+bool menu_select    (Menu *self, u16 x, u16 y);
+u8   menu_get_value (const Menu *self);
+
+#endif /* !MENU_H */

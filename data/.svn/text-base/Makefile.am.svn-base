@@ -1,0 +1,10 @@
+# $Id$
+
+stuffdir=	${pkgdatadir}
+stuff_DATA=	dialog.bmp	\
+		menu0.bmp	\
+		menu1.bmp
+
+if HAVE_LIBSDL_TTF
+	stuff_DATA+=	DejaVuSans.ttf
+endif
